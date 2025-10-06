@@ -1,0 +1,9 @@
+data/*
+__pycache__/
+checkpoints/
+outputs/*
+wandb/
+*.pyc
+*.pyo
+run_explore_script.ps1
+run_recording_script.ps1

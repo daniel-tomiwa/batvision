@@ -1,0 +1,8 @@
+name: unet_baseline
+
+# Model parameters
+dim: 64 
+init_dim: 64 # Initial dimension
+out_dim: 1 # Output dimension
+dim_mults: [1, 1, 2, 2, 3, 3, 4, 6, 8] # Channel multiplier for each layer
+channels: 2 # Input channels
