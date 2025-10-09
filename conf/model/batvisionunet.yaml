@@ -1,0 +1,11 @@
+name: batvision_unet
+
+# Model parameters
+ngf: 64 
+netG: unet_256 # unet_128 or unet_256
+output_nc: 1 # Output dimension
+input_nc: 2 # Input channels
+use_dropout: False # Use dropout layers
+norm: batch # Normalization type: batch, instance, none
+
+init_type: normal # Weight initialization type: normal, xavier, kaiming, orthogonal
