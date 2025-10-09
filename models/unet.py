@@ -39,10 +39,10 @@ class DoubleConv(nn.Module):
         # Define a sequence of operations: two convolutional layers with normalization and activation
         self.double_conv = nn.Sequential(
             WeightStandardizedConv2d(in_c, mid_c, kernel_size=3, padding=1, bias=False),
-            nn.GroupNorm(1, mid_c),
+            nn.GroupNorm(32, mid_c),
             nn.SiLU(),
             WeightStandardizedConv2d(mid_c, out_c, kernel_size=3, padding=1, bias=False),
-            nn.GroupNorm(1, out_c)
+            nn.GroupNorm(32, out_c)
         )
 
     # Forward pass through the module
@@ -82,7 +82,7 @@ class Up(nn.Module):
         return self.upconv(x)  # Apply upsampling and convolutions
     
 class MyUNet(nn.Module):
-    def __init__(self, dim:int, init_dim:int=None, out_dim:int=None, dim_mults:tuple=(1, 2, 4, 8), channels:int=1):
+    def __init__(self, dim:int, init_dim:int=None, out_dim:int=None, dim_mults:tuple=(1, 2, 4, 8), channels:int=1, depth_norm:bool=False):
 
         """
         A U-Net architecture for image processing tasks.
@@ -138,7 +138,13 @@ class MyUNet(nn.Module):
         default_out_dim = channels
         self.out_dim = default(out_dim, default_out_dim)
 
-        self.final_conv = nn.Conv2d(init_dim, self.out_dim, kernel_size=1)
+        self.depth_norm = depth_norm
+        last_activation = nn.ReLU() if not self.depth_norm else nn.Sigmoid()
+
+        self.final_conv = nn.Sequential(
+            nn.Conv2d(init_dim, self.out_dim, kernel_size=1),
+            last_activation
+        )
 
     def forward(self, x):
 
@@ -162,5 +168,5 @@ class MyUNet(nn.Module):
             x = torch.cat((x, h.pop()), dim=1)  # Concatenate with the corresponding skip connection
             x = block(x)  # Apply the first DoubleConv block
             x = upsample(x)  # Apply upsampling
-
+        
         return self.final_conv(x)  # Final output convolution

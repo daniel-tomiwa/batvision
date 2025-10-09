@@ -1,11 +1,12 @@
 # Training Settings
 mode: train
-experiment_name: first_run # Name of the experiment
+experiment_name: batvisionunet_first_full_run # Name of the experiment
 
-checkpoints: null # Checkpoints to resume training
+checkpoint_epoch: null # Checkpoints to resume training
+checkpoint_path: null # Path to the checkpoint to load
 saving_checkpoints: 10 # Save model every "saving_checkpoints" epochs
-epochs: 80 # Number of training epochs
-learning_rate: 0.001 # Learning rate
+epochs: 200 # Number of training epochs
+learning_rate: 0.0001 # Learning rate
 weight_decay: 0 # Weight decay for optimizer
 optimizer: AdamW # Optimize: 'Adam' or 'AdamW' or 'SGD' available
 criterion: L1 # Loss 

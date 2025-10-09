@@ -1,7 +1,8 @@
-from utils.dataset import BatvisionV2Dataset
-from utils.utils_general import get_optimizer
+from utils.dataloader import BatvisionV2Dataset
+from utils.utils_general import get_optimizer, init_net
 from trainer import Trainer
 from models.unet import MyUNet
+from models.batvision_unet import define_G
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -33,51 +34,68 @@ def main(cfg: DictConfig):
     if cfg.dataset.name == 'batvisionv2':
 
         if cfg.mode.mode == 'train':
-            train_set = BatvisionV2Dataset(cfg, cfg.dataset.annotation_file_train) 
+            train_set = BatvisionV2Dataset(cfg, cfg.dataset.annotation_file_train, subset_number=cfg.dataset.subset_number) 
             print(f'Train Dataset of {len(train_set)} instances')
             train_loader = DataLoader(train_set, batch_size=cfg.mode.batch_size, shuffle=cfg.mode.shuffle, num_workers=cfg.mode.num_threads)
             if cfg.mode.validation:
-                val_set = BatvisionV2Dataset(cfg, cfg.dataset.annotation_file_val) 
+                val_set = BatvisionV2Dataset(cfg, cfg.dataset.annotation_file_val, subset_number=cfg.dataset.subset_number) 
                 print(f'Validation Dataset of {len(val_set)} instances')
                 val_loader = DataLoader(val_set, batch_size=cfg.mode.batch_size, shuffle=cfg.mode.shuffle, num_workers=cfg.mode.num_threads)
 
         elif cfg.mode.mode == 'test':
             if cfg.mode.eval_on == 'val':
-                eval_set = BatvisionV2Dataset(cfg, cfg.dataset.annotation_file_val) 
+                eval_set = BatvisionV2Dataset(cfg, cfg.dataset.annotation_file_val, subset_number=cfg.dataset.subset_number) 
             else:
-                eval_set = BatvisionV2Dataset(cfg, cfg.dataset.annotation_file_test) 
+                eval_set = BatvisionV2Dataset(cfg, cfg.dataset.annotation_file_test, subset_number=cfg.dataset.subset_number) 
             print(f'Eval Dataset of {len(eval_set)} instances')
-            eval_loader = DataLoader(eval_set, batch_size = cfg.mode.batch_size, shuffle=False, num_workers=cfg.mode.num_threads)
+            eval_loader = DataLoader(eval_set, batch_size=cfg.mode.batch_size, shuffle=False, num_workers=cfg.mode.num_threads)
 
     else:
         raise Exception('Training can be done only on BV1 and BV2')
     
 
     # ------------ Create model ------------
-    if cfg.model.name == 'unet_baseline':
+    if cfg.model.name == 'my_unet':
         model = MyUNet(
             dim=cfg.model.dim,
             init_dim=cfg.model.init_dim,
             out_dim=cfg.model.out_dim,
             dim_mults=cfg.model.dim_mults,
-            channels=cfg.model.channels
+            channels=cfg.model.channels,
+            depth_norm=cfg.dataset.depth_norm
         )
-        print(f'Model: {cfg.model.name} created')
-        summary(model.to(device), torch.zeros((1, 2, 256, 256)).to(device))
-        # os.exit(0)
+        model = init_net(model, init_type=cfg.model.init_type, init_gain=0.02, gpu_ids=[device])
+    elif cfg.model.name == 'batvision_unet':
+        model = define_G(
+            input_nc=cfg.model.input_nc, 
+            output_nc=cfg.model.output_nc, 
+            ngf=cfg.model.ngf, 
+            netG=cfg.model.netG, 
+            norm=cfg.model.norm, 
+            use_dropout=cfg.model.use_dropout, 
+            init_type=cfg.model.init_type, 
+            init_gain=0.02, 
+            gpu_ids=[device],
+            depth_norm=cfg.dataset.depth_norm
+        )
     else:
         raise Exception('Only unet_baseline is supported for now')
     
-    # ------------ Optimizer ------------
-    optimizer = get_optimizer(
-        model, 
-        lr=cfg.mode.learning_rate, 
-        weight_decay=cfg.mode.weight_decay, 
-        optimizer_type=cfg.mode.optimizer
-    )
+    print(f'Model: {cfg.model.name} created')
+    summary(model.to(device), torch.zeros((1, 2, 256, 256)).to(device))
+    # os.exit(0)
 
     # ------------ Trainer ------------
     if cfg.mode.mode == 'train':
+
+        # ------------ Optimizer ------------
+        optimizer = get_optimizer(
+            model, 
+            lr=cfg.mode.learning_rate, 
+            weight_decay=cfg.mode.weight_decay, 
+            optimizer_type=cfg.mode.optimizer
+        )
+        
         trainer = Trainer(
             cfg=cfg,
             device=device,
@@ -95,7 +113,6 @@ def main(cfg: DictConfig):
             device=device,
             model=model,
             data_loader=eval_loader,
-            optimizer=optimizer,
             use_tensorboard=cfg.mode.use_tensorboard
         )
         trainer.test()

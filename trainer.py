@@ -32,7 +32,8 @@ class Trainer:
         self.optimizer = optimizer
         self.use_tensorboard = use_tensorboard
         self.start_epoch = 0
-        self.experiment_name = cfg.model.name + '_' +  cfg.dataset.name + '_' + 'BS' + str(cfg.mode.batch_size) + '_' + 'Lr' + str(cfg.mode.learning_rate) + '_' + cfg.mode.optimizer + '_' + cfg.mode.experiment_name
+        if self.cfg.mode.mode == "train":
+            self.experiment_name = cfg.model.name + '_' +  cfg.dataset.name + '_' + 'BS' + str(cfg.mode.batch_size) + '_' + 'Lr' + str(cfg.mode.learning_rate) + '_' + cfg.mode.optimizer + '_' + cfg.mode.experiment_name
         self.criterion = None
 
         if self.use_tensorboard:
@@ -60,6 +61,10 @@ class Trainer:
             file.close()
 
     def _load_checkpoint(self, checkpoint_path: str):
+
+        if not os.path.exists(checkpoint_path):
+            raise ValueError(f"Checkpoint path {checkpoint_path} does not exist.")
+
         checkpoint = torch.load(checkpoint_path)
         self.model.load_state_dict(checkpoint["model_state_dict"])
         if self.optimizer:
@@ -79,18 +84,18 @@ class Trainer:
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict()
         }
-        path_check = './checkpoints/' + self.experiment_name + '/'
+        path_check = './outputs/checkpoints/' + self.experiment_name + '/'
         isExist = os.path.exists(path_check)
         if not isExist:
             os.makedirs(path_check)
-        torch.save(state, './checkpoints/' + self.experiment_name + '/checkpoint_' + str(epoch) + '.pth')
+        torch.save(state, './outputs/checkpoints/' + self.experiment_name + '/checkpoint_' + str(epoch) + '.pth')
 
     def train(self):
 
         if self.cfg.mode.use_wandb:
             wandb.login()
 
-        if self.cfg.mode.checkpoints is None:
+        if self.cfg.mode.checkpoint_epoch is None:
             self.start_epoch = 1
 
             if self.cfg.mode.use_wandb:
@@ -99,10 +104,17 @@ class Trainer:
                     name=self.experiment_name,
                     config=OmegaConf.to_container(self.cfg, resolve=True)
                 )
-        else:
-            load_epoch = self.cfg.mode.checkpoints
-            checkpoint_path = './checkpoints/' + self.experiment_name + '/checkpoint_' + str(load_epoch) + '.pth'
+        else: # NOTE: specify the checkpoint path and epoch in the config file
+            load_epoch = self.cfg.mode.checkpoint_epoch
+            checkpoint_path = self.cfg.mode.checkpoint_path
+            if checkpoint_path is None or load_epoch is None:
+                raise ValueError("checkpoint_path and checkpoint_epoch must be provided for resuming training.")
+            
+            checkpoint_path = checkpoint_path + '/checkpoint_' + str(load_epoch) + '.pth'
+
             self._load_checkpoint(checkpoint_path)
+
+            self.start_epoch = load_epoch + 1
 
             if self.cfg.mode.use_wandb:
 
@@ -253,22 +265,23 @@ class Trainer:
 
     def test(self):
 
-        if self.cfg.mode.checkpoints is None:
+        if self.cfg.mode.checkpoint_epoch is None or self.cfg.mode.checkpoint_path is None:
             raise ValueError("Checkpoint must be provided for testing.")
         else:
-            load_epoch = self.cfg.mode.checkpoints
-            checkpoint_path = './checkpoints/' + self.experiment_name + '/checkpoint_' + str(load_epoch) + '.pth'
+            load_epoch = self.cfg.mode.checkpoint_epoch
+            checkpoint_path = self.cfg.mode.checkpoint_path
+
+            checkpoint_path = os.path.join(checkpoint_path, 'checkpoint_' + str(load_epoch) + '.pth')
+
             self._load_checkpoint(checkpoint_path)
 
             if self.cfg.mode.use_wandb:
-
-                wandb.login(relogin=True)
+                wandb.login()
                 id = self.cfg.mode.wandb_id
                 if id is None:
                     raise ValueError("wandb_id must be provided for resuming wandb run.")
                 run = wandb.init(
                     project="batvision",
-                    name=self.experiment_name,
                     config=OmegaConf.to_container(self.cfg, resolve=True),
                     resume="allow",
                     id=id
@@ -291,6 +304,13 @@ class Trainer:
         delta2_list = []
         delta3_list = [] 
         mae_list = []
+
+        batch_bar = tqdm(
+                total=len(self.data_loader),
+                dynamic_ncols=True,
+                leave=False,
+                position=0                
+            )
 
         with torch.no_grad():
 
@@ -325,6 +345,9 @@ class Trainer:
                     delta3_list.append(a3)
                     mae_list.append(mae)
 
+                batch_bar.set_postfix(loss=np.mean(loss_list))
+                batch_bar.update()
+
         # Save evaluation
         d = {
             'loss': loss_list, 
@@ -340,12 +363,47 @@ class Trainer:
         }
 
         stats_df = pd.DataFrame(data=d)
+
+        save_path = "./outputs/eval/" + self.cfg.mode.checkpoint_path.split('/')[-1] + '/'
+
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+
         if self.cfg.mode.eval_on == 'test':
             stats_df.to_pickle(
-                os.path.join(self.cfg.mode.stat_dir + self.cfg.dataset.name, 'test',  'stats_on_' +  self.cfg.dataset.name + '_test_set_'+ self.cfg.mode.experiment_name + '_epoch_' + str(load_epoch) +".pkl")
+                save_path + "test.plk"
+            )
+        elif self.cfg.mode.eval_on == 'val':
+            stats_df.to_pickle(
+                save_path + "val.plk"
+            )
+        elif self.cfg.mode.eval_on == 'train':
+            stats_df.to_pickle(
+                save_path + "train.plk"
             )
         else:
-            stats_df.to_pickle(os.path.join(self.cfg.mode.stat_dir + self.cfg.dataset.name, 'val', 'stats_on_' + self.cfg.dataset.name + '_val_set_'+ self.cfg.mode.experiment_name + '_epoch_' + str(load_epoch) + ".pkl"))
+            raise ValueError("eval_on must be 'test', 'val' or 'train'.")
 
         if self.cfg.mode.use_wandb:
+
+            # images_to_log = []
+
+            # for i in range(min(21, len(pred_imgs_to_save))):
+            #     images_to_log.append(wandb.Image(
+            #         np.concatenate([gt_imgs_to_save[i], pred_imgs_to_save[i]], axis=0),
+            #         caption=f"GT vs Pred #{i}"
+            #     ))
+            # wandb.log({"test/examples": images_to_log})
+
+            wandb.log({
+                "test/loss_mean": np.mean(loss_list),
+                "test/abs_rel_mean": np.mean(abs_rel_list),
+                "test/rmse_mean": np.mean(rmse_list),
+                "test/log10_mean": np.mean(log10_list),
+                "test/delta1_mean": np.mean(delta1_list),
+                "test/delta2_mean": np.mean(delta2_list),
+                "test/delta3_mean": np.mean(delta3_list),
+                "test/mae_mean": np.mean(mae_list),
+            })
+
             run.finish() 
