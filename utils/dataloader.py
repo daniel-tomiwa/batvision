@@ -4,11 +4,12 @@ import torchaudio
 import torchaudio.transforms as T
 from torch.utils.data import Dataset
 import numpy as np
+import matplotlib.pyplot as plt
 
 from .utils_general import get_transform
 
 
-class BatvisionV2Dataset(Dataset):
+class BatvisionV2DatasetTrain(Dataset):
     
     def __init__(self, cfg, annotation_file, location_blacklist=None, subset_number=None):
    
@@ -106,3 +107,60 @@ class BatvisionV2Dataset(Dataset):
           n_mels = 32, 
         )
         return melspectrogram(waveform)
+    
+class BatvisionV2DatasetTest(BatvisionV2DatasetTrain):
+
+    def __getitem__(self, idx):
+        # Access instance 
+        instance = self.instances.iloc[idx]
+        
+        # Load path
+        depth_path = os.path.join(self.root_dir,instance['depth path'],instance['depth file name'])
+        audio_path = os.path.join(self.root_dir,instance['audio path'],instance['audio file name'])
+        image_path = os.path.join(self.root_dir,instance['camera path'],instance['camera file name'])
+
+        ## Depth
+        # Load depth map
+        depth = np.load(depth_path).astype(np.float32)
+        depth = depth / 1000 # to go from mm to m
+        if self.cfg.dataset.max_depth:
+            depth[depth > self.cfg.dataset.max_depth] = self.cfg.dataset.max_depth 
+        # Transform
+        depth_transform = get_transform(self.cfg, convert=True, depth_norm=self.cfg.dataset.depth_norm)
+        gt_depth = depth_transform(depth)
+        
+        ## Audio 
+        # Load audio binaural waveform
+        waveform, sr = torchaudio.load(audio_path)
+        # NOTE: STFT parameters for full length audio
+        win_length = 200 
+        n_fft = 400
+        hop_length = 100
+
+        # Cut audio to fit max depth
+        if self.cfg.dataset.max_depth:
+            cut = int((2*self.cfg.dataset.max_depth / 340) * sr)
+            waveform = waveform[:,:cut]
+            # Update STFT parameters 
+            win_length = 64
+            n_fft = 512
+            hop_length=64//4
+
+        # Process sound
+        if 'spectrogram' in self.audio_format:
+            if 'mel' in self.audio_format:
+                spec = self._get_melspectrogram(waveform, n_fft = n_fft, power = 1.0, win_length = win_length)
+            else:
+                spec = self._get_spectrogram(waveform, n_fft = n_fft, power = 1.0, win_length = win_length, hop_length =  hop_length)
+            spec_transform =  get_transform(self.cfg, convert = False) # convert False because already a tensor
+            audio2return = spec_transform(spec)
+        elif 'waveform' in self.audio_format:
+            audio2return = waveform
+
+        ## Image
+        image = plt.imread(image_path)
+        # Transform
+        image_transform = get_transform(self.cfg, convert=True)
+        image = image_transform(image).squeeze().permute(1,2,0).numpy() # to have C last
+
+        return audio2return, gt_depth, image

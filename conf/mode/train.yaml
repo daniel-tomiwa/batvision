@@ -1,6 +1,6 @@
 # Training Settings
 mode: train
-experiment_name: batvisionunet_first_full_run # Name of the experiment
+experiment_name: more_features_no_residual # Name of the experiment
 
 checkpoint_epoch: null # Checkpoints to resume training
 checkpoint_path: null # Path to the checkpoint to load
@@ -23,3 +23,5 @@ shuffle: True # If "True" shuffle train set and val set
 
 use_tensorboard: False # Use Tensorboard to display images and loss
 use_wandb: True # Use Weights & Biases to log images and loss
+wandb_id: 0ev9zotx # wandb run id to resume
+wandb_api_key:  # Your wandb API key

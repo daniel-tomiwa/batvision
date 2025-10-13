@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 from einops import rearrange, reduce
 from functools import partial
+from utils.utils_general import get_norm_layer
 
 # helpers functions
 def exists(x):
@@ -31,18 +32,27 @@ class WeightStandardizedConv2d(nn.Conv2d):
 
 class DoubleConv(nn.Module):
     # Initialize the DoubleConv module
-    def __init__(self, in_c: int, out_c: int, mid_c=None, residual=False):
+    def __init__(self, in_c: int, out_c: int, mid_c: int=None, residual: bool=False, norm_type: str='group', conv_type: str='standard'):
         super().__init__()
         self.residual = residual  # Whether to use residual connections
         if not mid_c:
             mid_c = out_c  # If mid_c is not provided, use out_c
+
+        if conv_type == 'standard':
+            conv_layer = nn.Conv2d
+        elif conv_type == 'weight_standardized':
+            conv_layer = WeightStandardizedConv2d
+        else:
+            raise ValueError(f"Unsupported conv_type: {conv_type}")
+
+        norm_layer = get_norm_layer(norm_type)  # Get the normalization layer
         # Define a sequence of operations: two convolutional layers with normalization and activation
         self.double_conv = nn.Sequential(
-            WeightStandardizedConv2d(in_c, mid_c, kernel_size=3, padding=1, bias=False),
-            nn.GroupNorm(32, mid_c),
+            conv_layer(in_c, mid_c, kernel_size=3, padding=1, bias=False),
+            norm_layer(mid_c),
             nn.SiLU(),
-            WeightStandardizedConv2d(mid_c, out_c, kernel_size=3, padding=1, bias=False),
-            nn.GroupNorm(32, out_c)
+            conv_layer(mid_c, out_c, kernel_size=3, padding=1, bias=False),
+            norm_layer(out_c)
         )
 
     # Forward pass through the module
@@ -54,12 +64,12 @@ class DoubleConv(nn.Module):
 
 class Down(nn.Module):
     # Initialize the Down module for downsampling
-    def __init__(self, in_c: int, out_c: int):
+    def __init__(self, in_c: int, out_c: int, norm_type: str='group', conv_type: str='standard'):
         super().__init__()
         # Define a sequence of operations: max pooling followed by two DoubleConv modules
         self.maxpool_conv = nn.Sequential(
             nn.MaxPool2d(2),
-            DoubleConv(in_c, out_c)
+            DoubleConv(in_c, out_c, norm_type=norm_type, conv_type=conv_type)
         )
 
     # Forward pass through the module
@@ -69,12 +79,12 @@ class Down(nn.Module):
 
 class Up(nn.Module):
     # Initialize the Up module for upsampling
-    def __init__(self, in_c, out_c):
+    def __init__(self, in_c, out_c, norm_type: str='group', conv_type: str='standard'):
         super().__init__()
         # Define a sequence of operations: upsampling followed by two DoubleConv modules
         self.upconv = nn.Sequential(
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-            DoubleConv(in_c, out_c, mid_c=in_c//2, residual=False)
+            DoubleConv(in_c, out_c, mid_c=in_c//2, residual=False, norm_type=norm_type, conv_type=conv_type)
         )
 
     # Forward pass through the module
@@ -82,7 +92,17 @@ class Up(nn.Module):
         return self.upconv(x)  # Apply upsampling and convolutions
     
 class MyUNet(nn.Module):
-    def __init__(self, dim:int, init_dim:int=None, out_dim:int=None, dim_mults:tuple=(1, 2, 4, 8), channels:int=1, depth_norm:bool=False):
+    def __init__(
+            self, 
+            dim:int, 
+            init_dim:int=None, 
+            out_dim:int=None, 
+            dim_mults:tuple=(1, 2, 4, 8), 
+            channels:int=1, 
+            depth_norm:bool=False, 
+            norm_type: str='group', 
+            conv_type: str='standard'
+        ):
 
         """
         A U-Net architecture for image processing tasks.
@@ -93,6 +113,9 @@ class MyUNet(nn.Module):
             out_dim (int, optional): Output dimension for the final layer.
             dim_mults (tuple, optional): Multiplicative factors for the dimensions at each layer. Defaults to (1, 2, 4, 8).
             channels (int, optional): Number of input channels. Defaults to 1.
+            depth_norm (bool, optional): If True, applies depth normalization at the output layer. Defaults to False.
+            norm_type (str, optional): Type of normalization to use ('batch', 'instance', 'group', 'none'). Defaults to 'group'.
+            conv_type (str, optional): Type of convolution to use ('standard', 'weight_standardized'). Defaults to 'standard'.
         """
 
         super().__init__()
@@ -115,14 +138,14 @@ class MyUNet(nn.Module):
 
             self.downs.append(
                 nn.ModuleList([
-                    DoubleConv(dim_in, dim_in, residual=True),
-                    Down(dim_in, dim_out) if not is_last else nn.Conv2d(dim_in, dim_out, 3, padding=1)
+                    DoubleConv(dim_in, dim_in, residual=False, norm_type=norm_type, conv_type=conv_type),
+                    Down(dim_in, dim_out, norm_type=norm_type, conv_type=conv_type) if not is_last else nn.Conv2d(dim_in, dim_out, 3, padding=1)
                 ])
             )
 
         # Middle layers
         mid_dim = dims[-1] # The last element in dims represents the middle dimension
-        self.mid_block1 = DoubleConv(mid_dim, mid_dim, residual=True)
+        self.mid_block1 = DoubleConv(mid_dim, mid_dim, residual=False, norm_type=norm_type)
         
         for ind, (dim_in, dim_out) in enumerate(reversed(in_out)):
 
@@ -130,8 +153,8 @@ class MyUNet(nn.Module):
 
             self.ups.append(
                 nn.ModuleList([
-                    DoubleConv(dim_out + dim_in, dim_out),
-                    Up(dim_out, dim_in) if not is_last else nn.Conv2d(dim_out, dim_in, 3, padding=1)
+                    DoubleConv(dim_out + dim_in, dim_out, norm_type=norm_type, conv_type=conv_type),
+                    Up(dim_out, dim_in, norm_type=norm_type, conv_type=conv_type) if not is_last else nn.Conv2d(dim_out, dim_in, 3, padding=1)
                 ])
             )
 

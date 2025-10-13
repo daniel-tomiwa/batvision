@@ -2,6 +2,36 @@ import torch
 import torch.nn as nn
 import numpy as np
 import torchvision.transforms as transforms
+import functools
+import matplotlib.pyplot as plt
+import pandas as pd
+
+class Identity(nn.Module):
+    def forward(self, x):
+        return x
+
+def get_norm_layer(norm_type='instance'):
+    """Return a normalization layer
+
+    Parameters:
+        norm_type (str) -- the name of the normalization layer: batch | instance | none
+
+    For BatchNorm, we use learnable affine parameters and track running statistics (mean/stddev).
+    For InstanceNorm, we do not use learnable affine parameters. We do not track running statistics.
+    """
+    if norm_type == 'batch':
+        norm_layer = functools.partial(nn.BatchNorm2d, affine=True, track_running_stats=True)
+    elif norm_type == 'instance':
+        norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
+    elif norm_type == 'group':
+        def norm_layer(x): return nn.GroupNorm(num_groups=32, num_channels=x, affine=True)
+    elif norm_type == 'none':
+        def norm_layer(x): return Identity()
+    else:
+        raise NotImplementedError('normalization layer [%s] is not found' % norm_type)
+    
+    return norm_layer
+
 
 
 def init_weights(net, init_type='normal', init_gain=0.02):
@@ -147,3 +177,40 @@ class MinMaxNorm(torch.nn.Module):
             norm_tensor = (tensor - self.min) / (self.max - self.min)
 
         return norm_tensor
+    
+
+def visualize_predictions(combined_df: pd.DataFrame, num_samples: int = 5, random_seed: int = 42, show: bool = True) -> plt.Figure:
+
+    n_samples = min(num_samples, len(combined_df))
+    samples = combined_df.sample(n=n_samples, random_state=random_seed).reset_index(drop=True)
+
+    fig, axes = plt.subplots(n_samples, 3, figsize=(12, 3 * n_samples))
+
+    for i in range(n_samples):
+        instance = samples.iloc[i]
+
+        gt_depth = instance['gt_images'][0, :, :]
+        pred_depth = instance['pred_imgs'][0, :, :]
+        original_image = instance['input_images']
+
+
+        axes[i, 0].imshow(original_image)
+        axes[i, 0].set_title('RGB Image')
+        axes[i, 0].axis('off')
+
+        im1 = axes[i, 1].imshow(gt_depth, cmap='plasma')
+        axes[i, 1].set_title('Ground Truth Depth')
+        axes[i, 1].axis('off')
+        fig.colorbar(im1, ax=axes[i, 1], fraction=0.046, pad=0.04)
+
+        im2 = axes[i, 2].imshow(pred_depth, cmap='plasma')
+        axes[i, 2].set_title('Predicted Depth')
+        axes[i, 2].axis('off')
+        fig.colorbar(im2, ax=axes[i, 2], fraction=0.046, pad=0.04)
+
+    plt.tight_layout()
+
+    if show:
+        plt.show()
+
+    return fig

@@ -1,6 +1,6 @@
 import torch
 from torch.utils.tensorboard import SummaryWriter
-from utils.utils_general import compute_errors
+from utils.utils_general import compute_errors, visualize_predictions
 from utils.utils_tensorboard import tensorboard_display_input_pred
 from omegaconf import DictConfig, OmegaConf
 import time
@@ -9,6 +9,7 @@ import pandas as pd
 import os
 import wandb
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 class Trainer:
     def __init__(
@@ -32,6 +33,7 @@ class Trainer:
         self.optimizer = optimizer
         self.use_tensorboard = use_tensorboard
         self.start_epoch = 0
+        self.best_val_loss = float('inf')
         if self.cfg.mode.mode == "train":
             self.experiment_name = cfg.model.name + '_' +  cfg.dataset.name + '_' + 'BS' + str(cfg.mode.batch_size) + '_' + 'Lr' + str(cfg.mode.learning_rate) + '_' + cfg.mode.optimizer + '_' + cfg.mode.experiment_name
         self.criterion = None
@@ -60,6 +62,29 @@ class Trainer:
             file.write(str(self.model))
             file.close()
 
+    def _save_architecture(self):
+        
+        # Make sure the output architectures directory exists
+        architecture_path = os.path.join('outputs', 'architecture')
+        if not os.path.exists(architecture_path):
+            os.makedirs(architecture_path)
+
+        model_arch_path = os.path.join(architecture_path, self.experiment_name)
+
+        if not os.path.exists(model_arch_path):
+            os.makedirs(model_arch_path)
+
+        model_arch_file = os.path.join(model_arch_path, 'model_architecture.txt')
+        model_arch = str(self.model)
+        try:
+            with open(model_arch_file, 'w') as f:
+                f.write(model_arch)
+        except Exception as e:
+            print(f"Error saving model architecture: {e}")
+
+        if self.cfg.mode.use_wandb:
+            wandb.save(model_arch_file)
+
     def _load_checkpoint(self, checkpoint_path: str):
 
         if not os.path.exists(checkpoint_path):
@@ -77,7 +102,7 @@ class Trainer:
         else:
             raise ValueError(f"Unsupported loss type: {self.cfg.mode.criterion}")
         
-    def _save_checkpoint(self, epoch: int):
+    def _save_checkpoint(self, epoch: int, is_best: bool = False):
         print('Save network at epoch {}'.format(epoch))
         state = {
             'epoch': epoch,
@@ -89,11 +114,17 @@ class Trainer:
         if not isExist:
             os.makedirs(path_check)
         torch.save(state, './outputs/checkpoints/' + self.experiment_name + '/checkpoint_' + str(epoch) + '.pth')
+        if is_best:
+            torch.save(state, './outputs/checkpoints/' + self.experiment_name + '/model_best.pth')
+        if self.cfg.mode.use_wandb:
+            wandb.save('./outputs/checkpoints/' + self.experiment_name + '/checkpoint_' + str(epoch) + '.pth')
+            if is_best:
+                wandb.save('./outputs/checkpoints/' + self.experiment_name + '/model_best.pth')
 
     def train(self):
 
         if self.cfg.mode.use_wandb:
-            wandb.login()
+            wandb.login(key=self.cfg.mode.wandb_api_key)
 
         if self.cfg.mode.checkpoint_epoch is None:
             self.start_epoch = 1
@@ -104,6 +135,9 @@ class Trainer:
                     name=self.experiment_name,
                     config=OmegaConf.to_container(self.cfg, resolve=True)
                 )
+
+            self._save_architecture() # save architecture at the beginning of training
+
         else: # NOTE: specify the checkpoint path and epoch in the config file
             load_epoch = self.cfg.mode.checkpoint_epoch
             checkpoint_path = self.cfg.mode.checkpoint_path
@@ -141,6 +175,7 @@ class Trainer:
         self._initialize_criterion()
 
         num_epochs = self.cfg.mode.epochs
+        is_best = False
 
         for epoch in range(self.start_epoch, num_epochs + 1):
 
@@ -230,6 +265,13 @@ class Trainer:
                     val_errors['DELTA2'] = mean_errors[3]
                     val_errors['DELTA3'] = mean_errors[4]
 
+                    # save best model
+                    if np.mean(batch_loss_val) < self.best_val_loss:
+                        self.best_val_loss = np.mean(batch_loss_val)
+                        is_best = True
+                    else:
+                        is_best = False
+
                     if self.use_tensorboard:
                         self.writer.add_scalar('Val/Loss', np.mean(batch_loss_val), epoch)
                         self.writer.add_scalar('Val/RMSE', val_errors['RMSE'], epoch)
@@ -258,7 +300,7 @@ class Trainer:
 
             # ------- Save ------------
             if epoch % self.cfg.mode.saving_checkpoints == 0:
-                self._save_checkpoint(epoch)
+                self._save_checkpoint(epoch, is_best)
 
         if self.cfg.mode.use_wandb:
             run.finish()
@@ -276,7 +318,7 @@ class Trainer:
             self._load_checkpoint(checkpoint_path)
 
             if self.cfg.mode.use_wandb:
-                wandb.login()
+                wandb.login(key=self.cfg.mode.wandb_api_key)
                 id = self.cfg.mode.wandb_id
                 if id is None:
                     raise ValueError("wandb_id must be provided for resuming wandb run.")
@@ -295,8 +337,9 @@ class Trainer:
 
         gt_imgs_to_save = []
         pred_imgs_to_save = []
+        image_imgs_to_save = []
         loss_list = []
-        errors = []
+        # errors = []
         rmse_list = []
         abs_rel_list = []
         log10_list = []
@@ -314,19 +357,21 @@ class Trainer:
 
         with torch.no_grad():
 
-            for audio, depth in self.data_loader:
+            for audio, depth, image in self.data_loader:
 
                 audio = audio.to(self.device)
                 depth = depth.to(self.device)
+                image = image.to(self.device)
 
                 depth_pred = self.model(audio)
 
-                loss_test = self.criterion(depth_pred[depth !=0], depth[depth !=0]) 
+                loss_test = self.criterion(depth_pred[depth !=0], depth[depth !=0])
                 loss_list.append(loss_test.cpu().item())
 
                 for idx in range(depth_pred.shape[0]):
                     gt_imgs_to_save.append(depth[idx].detach().cpu().numpy())
                     pred_imgs_to_save.append(depth_pred[idx].detach().cpu().numpy())
+                    image_imgs_to_save.append(image[idx].detach().cpu().numpy())
                     if self.cfg.dataset.depth_norm:
                         unscaledgt = depth[idx].detach().cpu().numpy() * self.cfg.dataset.max_depth
                         unscaledpred = depth_pred[idx].detach().cpu().numpy() * self.cfg.dataset.max_depth
@@ -336,7 +381,7 @@ class Trainer:
                         abs_rel, rmse, a1, a2, a3, log_10, mae = compute_errors(depth[idx].cpu().numpy(), 
                                 depth_pred[idx].cpu().numpy())
                         
-                    errors.append((abs_rel, rmse, a1, a2, a3, log_10, mae))
+                    # errors.append((abs_rel, rmse, a1, a2, a3, log_10, mae))
                     rmse_list.append(rmse)
                     abs_rel_list.append(abs_rel)
                     log10_list.append(log_10)
@@ -359,7 +404,8 @@ class Trainer:
             'delta3': delta3_list, 
             'mae': mae_list, 
             'gt_images': gt_imgs_to_save, 
-            'pred_imgs': pred_imgs_to_save
+            'pred_imgs': pred_imgs_to_save,
+            'input_images': image_imgs_to_save
         }
 
         stats_df = pd.DataFrame(data=d)
@@ -383,27 +429,24 @@ class Trainer:
             )
         else:
             raise ValueError("eval_on must be 'test', 'val' or 'train'.")
+        
+        pred_fig = visualize_predictions(stats_df, num_samples=20, random_seed=42, show=False)
 
         if self.cfg.mode.use_wandb:
 
-            # images_to_log = []
-
-            # for i in range(min(21, len(pred_imgs_to_save))):
-            #     images_to_log.append(wandb.Image(
-            #         np.concatenate([gt_imgs_to_save[i], pred_imgs_to_save[i]], axis=0),
-            #         caption=f"GT vs Pred #{i}"
-            #     ))
-            # wandb.log({"test/examples": images_to_log})
+            wandb.log({"Test/examples": wandb.Image(pred_fig)})
 
             wandb.log({
-                "test/loss_mean": np.mean(loss_list),
-                "test/abs_rel_mean": np.mean(abs_rel_list),
-                "test/rmse_mean": np.mean(rmse_list),
-                "test/log10_mean": np.mean(log10_list),
-                "test/delta1_mean": np.mean(delta1_list),
-                "test/delta2_mean": np.mean(delta2_list),
-                "test/delta3_mean": np.mean(delta3_list),
-                "test/mae_mean": np.mean(mae_list),
+                "Test/loss_mean": np.mean(loss_list),
+                "Test/abs_rel_mean": np.mean(abs_rel_list),
+                "Test/rmse_mean": np.mean(rmse_list),
+                "Test/log10_mean": np.mean(log10_list),
+                "Test/delta1_mean": np.mean(delta1_list),
+                "Test/delta2_mean": np.mean(delta2_list),
+                "Test/delta3_mean": np.mean(delta3_list),
+                "Test/mae_mean": np.mean(mae_list),
             })
 
             run.finish() 
+
+        plt.close(pred_fig)
