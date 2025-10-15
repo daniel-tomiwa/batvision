@@ -1,6 +1,6 @@
 defaults:
   - dataset: batvisionv2 # Choice of dataset
-  - mode: test # "train" or "test"
+  - mode: train # "train" or "test"
   - model: batvisionunet # Choice of model
   - _self_
 
@@ -8,5 +8,8 @@ defaults:
 # Hydra settings
 hydra:
     run:
-        dir: outputs/${model.name}_configs/${dataset.name}/${mode.mode}_${mode.experiment_name}/${now:%H-%M-%S}
+        dir: outputs/${model.name}_configs/${dataset.name}/${mode.mode}_${mode.experiment_name}/${now:%Y-%m-%d_%H-%M-%S}
     output_subdir: configfile
+    sweep:
+        dir: multiruns/${model.name}_configs/${dataset.name}/${mode.mode}_${mode.experiment_name}/${now:%Y-%m-%d_%H-%M-%S}
+        subdir: ${hydra.job.num}

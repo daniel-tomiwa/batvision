@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 
 class ASTModel(nn.Module):

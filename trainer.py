@@ -10,6 +10,7 @@ import os
 import wandb
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from hydra.core.hydra_config import HydraConfig
 
 class Trainer:
     def __init__(
@@ -109,17 +110,34 @@ class Trainer:
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict()
         }
-        path_check = './outputs/checkpoints/' + self.experiment_name + '/'
-        isExist = os.path.exists(path_check)
-        if not isExist:
-            os.makedirs(path_check)
-        torch.save(state, './outputs/checkpoints/' + self.experiment_name + '/checkpoint_' + str(epoch) + '.pth')
+
+        run_dir = HydraConfig.get().run.dir
+        print("Run directory:", run_dir)
+        checkpoint_dir = os.path.join(run_dir, 'checkpoints')
+        print("Checkpoint directory:", checkpoint_dir)
+        if not os.path.exists(checkpoint_dir):
+            os.makedirs(checkpoint_dir)
+        
+        checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_{epoch}.pth')
+        best_model_path = os.path.join(checkpoint_dir, 'model_best.pth')
+
+
+        # path_check = './outputs/checkpoints/' + self.experiment_name + '/'
+        # isExist = os.path.exists(path_check)
+        # if not isExist:
+        #     os.makedirs(path_check)
+        # torch.save(state, './outputs/checkpoints/' + self.experiment_name + '/checkpoint_' + str(epoch) + '.pth')
+        torch.save(state, checkpoint_path)
         if is_best:
-            torch.save(state, './outputs/checkpoints/' + self.experiment_name + '/model_best.pth')
+            # torch.save(state, './outputs/checkpoints/' + self.experiment_name + '/model_best.pth')
+            torch.save(state, best_model_path)
         if self.cfg.mode.use_wandb:
-            wandb.save('./outputs/checkpoints/' + self.experiment_name + '/checkpoint_' + str(epoch) + '.pth')
+            # wandb.save('./outputs/checkpoints/' + self.experiment_name + '/checkpoint_' + str(epoch) + '.pth')
+            wandb.save(checkpoint_path)
             if is_best:
-                wandb.save('./outputs/checkpoints/' + self.experiment_name + '/model_best.pth')
+                # wandb.save('./outputs/checkpoints/' + self.experiment_name + '/model_best.pth')
+                wandb.save(best_model_path)
+                
 
     def train(self):
 

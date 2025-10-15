@@ -12,4 +12,4 @@ images_size: 256 # Image size if resize
 max_depth: 30.0 # Maximum depth value in meters
 
 # Other parameters
-subset_number: null # Use a subset of the dataset for quick experiments. Set to null to use full dataset
+subset_number: 2 # Use a subset of the dataset for quick experiments. Set to null to use full dataset
