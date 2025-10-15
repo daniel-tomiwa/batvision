@@ -68,16 +68,12 @@ class Trainer:
     def _save_architecture(self):
         
         # Make sure the output architectures directory exists
-        architecture_path = os.path.join('outputs', 'architecture')
+        architecture_path = os.path.join(self.run_dir, 'architecture')
         if not os.path.exists(architecture_path):
             os.makedirs(architecture_path)
 
-        model_arch_path = os.path.join(architecture_path, self.experiment_name)
+        model_arch_file = os.path.join(architecture_path, "model_architecture.txt")
 
-        if not os.path.exists(model_arch_path):
-            os.makedirs(model_arch_path)
-
-        model_arch_file = os.path.join(model_arch_path, 'model_architecture.txt')
         model_arch = str(self.model)
         try:
             with open(model_arch_file, 'w') as f:
