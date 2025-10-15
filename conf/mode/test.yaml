@@ -15,4 +15,4 @@ batch_size: 1
 use_tensorboard: False # Use Tensorboard to display images and loss
 use_wandb: True # Use Weights & Biases to log images and loss
 wandb_id: 0ev9zotx # wandb run id to resume
-wandb_api_key:  # Your wandb API key
+wandb_api_key: # Your wandb API key

@@ -11,6 +11,7 @@ import wandb
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from hydra.core.hydra_config import HydraConfig
+from tabulate import tabulate
 
 class Trainer:
     def __init__(
@@ -38,6 +39,7 @@ class Trainer:
         if self.cfg.mode.mode == "train":
             self.experiment_name = cfg.model.name + '_' +  cfg.dataset.name + '_' + 'BS' + str(cfg.mode.batch_size) + '_' + 'Lr' + str(cfg.mode.learning_rate) + '_' + cfg.mode.optimizer + '_' + cfg.mode.experiment_name
         self.criterion = None
+        self.run_dir = HydraConfig.get().run.dir
 
         if self.use_tensorboard:
 
@@ -111,33 +113,76 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict()
         }
 
-        run_dir = HydraConfig.get().run.dir
-        print("Run directory:", run_dir)
-        checkpoint_dir = os.path.join(run_dir, 'checkpoints')
-        print("Checkpoint directory:", checkpoint_dir)
+        checkpoint_dir = os.path.join(self.run_dir, 'checkpoints')
         if not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir)
         
         checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_{epoch}.pth')
         best_model_path = os.path.join(checkpoint_dir, 'model_best.pth')
 
-
-        # path_check = './outputs/checkpoints/' + self.experiment_name + '/'
-        # isExist = os.path.exists(path_check)
-        # if not isExist:
-        #     os.makedirs(path_check)
-        # torch.save(state, './outputs/checkpoints/' + self.experiment_name + '/checkpoint_' + str(epoch) + '.pth')
         torch.save(state, checkpoint_path)
         if is_best:
-            # torch.save(state, './outputs/checkpoints/' + self.experiment_name + '/model_best.pth')
             torch.save(state, best_model_path)
         if self.cfg.mode.use_wandb:
-            # wandb.save('./outputs/checkpoints/' + self.experiment_name + '/checkpoint_' + str(epoch) + '.pth')
             wandb.save(checkpoint_path)
             if is_best:
-                # wandb.save('./outputs/checkpoints/' + self.experiment_name + '/model_best.pth')
                 wandb.save(best_model_path)
-                
+
+    def _save_mean_metrics(
+            self, 
+            abs_rel_list, 
+            rmse_list, 
+            log10_list, 
+            delta1_list, 
+            delta2_list, 
+            delta3_list, 
+            mae_list,
+            loss_list,
+            model_name=None,
+            output_dir=None,
+            filename='mean_metrics.txt'
+        ):
+
+        # Compute mean values
+        metrics = {
+            "RMSE↓": np.mean(rmse_list),
+            "REL↓": np.mean(abs_rel_list),
+            "log10↓": np.mean(log10_list),
+            "δ1.25↑": np.mean(delta1_list),
+            "δ1.25²↑": np.mean(delta2_list),
+            "δ1.25³↑": np.mean(delta3_list),
+            "MAE↓": np.mean(mae_list),
+            "Loss↓": np.mean(loss_list)
+        }
+
+        # Prepare table
+        headers = ["Model", "RMSE↓", "REL↓", "log10↓", "δ1.25↑", "δ1.25²↑", "δ1.25³↑", "MAE↓", "Loss↓"]
+        row = [
+            model_name,
+            f"{metrics['RMSE↓']:.3f}",
+            f"{metrics['REL↓']:.3f}",
+            f"{metrics['log10↓']:.3f}",
+            f"{metrics['δ1.25↑']:.3f}",
+            f"{metrics['δ1.25²↑']:.3f}",
+            f"{metrics['δ1.25³↑']:.3f}",
+            f"{metrics['MAE↓']:.3f}",
+            f"{metrics['Loss↓']:.3f}",
+        ]
+
+        metrics_file = os.path.join(output_dir, filename)
+
+        table = tabulate([row], headers=headers, tablefmt="grid")
+        
+        try:
+            with open(metrics_file, 'w') as f:
+                f.write(table + '\n')
+        except Exception as e:
+            print(f"Error saving mean metrics: {e}")
+
+        print("Mean metrics saved to", metrics_file)
+        print(table)
+
+        return metrics_file
 
     def train(self):
 
@@ -428,8 +473,7 @@ class Trainer:
 
         stats_df = pd.DataFrame(data=d)
 
-        save_path = "./outputs/eval/" + self.cfg.mode.checkpoint_path.split('/')[-1] + '/'
-
+        save_path = os.path.join(self.run_dir, 'eval')
         if not os.path.exists(save_path):
             os.makedirs(save_path)
 
@@ -449,22 +493,27 @@ class Trainer:
             raise ValueError("eval_on must be 'test', 'val' or 'train'.")
         
         pred_fig = visualize_predictions(stats_df, num_samples=20, random_seed=42, show=False)
+        # Save the figure
+        pred_fig.savefig(os.path.join(save_path, 'pred_examples.png'))
+
+        metrics_file = self._save_mean_metrics(
+            abs_rel_list, 
+            rmse_list, 
+            log10_list, 
+            delta1_list, 
+            delta2_list, 
+            delta3_list, 
+            mae_list,
+            loss_list,
+            model_name="{}_epoch_{}".format(self.cfg.model.name, load_epoch),
+            output_dir=save_path,
+            filename='mean_metrics.txt'
+        )
 
         if self.cfg.mode.use_wandb:
+            wandb.save(os.path.join(save_path, "pred_examples.png"))
+            wandb.save(metrics_file)
 
-            wandb.log({"Test/examples": wandb.Image(pred_fig)})
-
-            wandb.log({
-                "Test/loss_mean": np.mean(loss_list),
-                "Test/abs_rel_mean": np.mean(abs_rel_list),
-                "Test/rmse_mean": np.mean(rmse_list),
-                "Test/log10_mean": np.mean(log10_list),
-                "Test/delta1_mean": np.mean(delta1_list),
-                "Test/delta2_mean": np.mean(delta2_list),
-                "Test/delta3_mean": np.mean(delta3_list),
-                "Test/mae_mean": np.mean(mae_list),
-            })
-
-            run.finish() 
+            run.finish()
 
         plt.close(pred_fig)

@@ -1,6 +1,6 @@
 defaults:
   - dataset: batvisionv2 # Choice of dataset
-  - mode: train # "train" or "test"
+  - mode: test # "train" or "test"
   - model: batvisionunet # Choice of model
   - _self_
 
