@@ -46,11 +46,12 @@ def forward_flex(self, x):
     # pos_embed = self._resize_pos_embed(
     #     self.pos_embed, h // self.patch_size[1], w // self.patch_size[0]
     # )
-    pos_embed = self._resize_pos_embed(
-        self.v.pos_embed, h // self.p_fshape, w // self.p_tshape
-    )
+    # pos_embed = self._resize_pos_embed(
+    #     self.v.pos_embed, h // self.p_fshape, w // self.p_tshape
+    # )
+    pos_embed = self.v.pos_embed
 
-    B = x.shape[0]
+    B = x.shape[0] # x: (1,1,128,1024)
 
     if hasattr(self.v.patch_embed, "backbone"):
         x = self.v.patch_embed.backbone(x)
@@ -70,6 +71,9 @@ def forward_flex(self, x):
             B, -1, -1
         )  # stole cls_tokens impl from Phil Wang, thanks
         x = torch.cat((cls_tokens, x), dim=1)
+
+    print("Positional Encoding Shapes: {} ".format(self.v.pos_embed.shape))
+    print("Input token sequence shape: {} ".format(x.shape))
 
     x = x + pos_embed
     x = self.v.pos_drop(x)
@@ -103,8 +107,8 @@ def forward_vit(pretrained, x):
             2,
             torch.Size(
                 [
-                    h // pretrained.model.patch_size[1],
-                    w // pretrained.model.patch_size[0],
+                    pretrained.model.f_dim,
+                    pretrained.model.t_dim, # NOTE: The f and t shapes are referring to the patch sizes in AST
                 ]
             ),
         )
@@ -343,22 +347,25 @@ def _make_ast_b16_backbone(
 
 
 def _make_pretrained_astb16_384(
-    pretrained, use_readout="ignore", hooks=None, enable_attention_hooks=False
-):
+        load_pretrained_mdl_path, use_readout="ignore", hooks=None, enable_attention_hooks=False, input_params=None
+    ):
     # model = timm.create_model("vit_base_patch16_384", pretrained=pretrained)
     # TODO: # What is the best way to load the AST model weights?
 
+    if input_params is None:
+        raise ValueError("input_params must be provided to load AST model with the right input dimensions.")
+
     model = ASTModel(
         label_dim=527,
-        fshape=16,
-        tshape=16,
-        fstride=10,
-        tstride=10,
-        input_fdim=128,
-        input_tdim=100,
+        fshape=input_params['fpatch_size'],
+        tshape=input_params['tpatch_size'],
+        fstride=input_params['input_fstride'],
+        tstride=input_params['input_tstride'],
+        input_fdim=input_params['input_fdim'],
+        input_tdim=input_params['input_tdim'],
         model_size="base",
         pretrain_stage=False,
-        load_pretrained_mdl_path="pretrained_models/SSAST-Base-Patch-400.pth?dl=1"
+        load_pretrained_mdl_path=load_pretrained_mdl_path
     )
 
     hooks = [2, 5, 8, 11] if hooks == None else hooks
@@ -368,4 +375,5 @@ def _make_pretrained_astb16_384(
         hooks=hooks,
         use_readout=use_readout,
         enable_attention_hooks=enable_attention_hooks,
+        start_index=model.cls_token_num
     )

@@ -61,6 +61,10 @@ class ASTModel(nn.Module):
         # override timm input shape restriction
         timm.models.vision_transformer.PatchEmbed = PatchEmbed
 
+        self.fshape, self.tshape = fshape, tshape
+        self.fstride, self.tstride = fstride, tstride
+        self.input_fdim, self.input_tdim = input_fdim, input_tdim
+
         # pretrain the AST models
         if pretrain_stage == True:
             if load_pretrained_mdl_path != None:
@@ -95,9 +99,6 @@ class ASTModel(nn.Module):
             # SSL Pretraining Code
             self.softmax = nn.Softmax(dim=-1)
             self.lsoftmax = nn.LogSoftmax(dim=-1)
-            self.fshape, self.tshape = fshape, tshape
-            self.fstride, self.tstride = fstride, tstride
-            self.input_fdim, self.input_tdim = input_fdim, input_tdim
             # this is a trick to make state_dict to track pretraining input_fdim and input_tdim and save them by using torch.save
             self.p_input_fdim, self.p_input_tdim = nn.Parameter(torch.tensor(input_fdim), requires_grad=False), nn.Parameter(torch.tensor(input_tdim), requires_grad=False)
 
@@ -117,6 +118,7 @@ class ASTModel(nn.Module):
             # get the intermediate shape
             self.p_f_dim, self.p_t_dim = self.get_shape(fstride, tstride, input_fdim, input_tdim, fshape, tshape)
             num_patches = self.p_f_dim * self.p_t_dim
+            self.f_dim, self.t_dim = self.p_f_dim, self.p_t_dim # NOTE: The pretraining patch array dimension is the intermediate representation shape
             self.num_patches = num_patches
             self.v.patch_embed.num_patches = num_patches
             
@@ -169,24 +171,24 @@ class ASTModel(nn.Module):
             self.mlp_head = nn.Sequential(nn.LayerNorm(self.original_embedding_dim),
                                           nn.Linear(self.original_embedding_dim, label_dim))
 
-            f_dim, t_dim = self.get_shape(fstride, tstride, input_fdim, input_tdim, fshape, tshape)
+            self.f_dim, self.t_dim = self.get_shape(self.fstride, self.tstride, self.input_fdim, self.input_tdim, self.fshape, self.tshape)
             # patch array dimension during pretraining
             p_f_dim, p_t_dim = audio_model.module.p_f_dim, audio_model.module.p_t_dim
-            num_patches = f_dim * t_dim
+            num_patches = self.f_dim * self.t_dim
             p_num_patches = p_f_dim * p_t_dim
             self.v.patch_embed.num_patches = num_patches
             print('fine-tuning patch split stride: frequncey={:d}, time={:d}'.format(fstride, tstride))
             print('fine-tuning number of patches={:d}'.format(num_patches))
 
             # patch shape should be same for pretraining and fine-tuning
-            if fshape != self.p_fshape or tshape != self.p_tshape:
-                raise ValueError('The patch shape of pretraining and fine-tuning is not consistant, pretraining: f={:d}, t={:d}, finetuning: f={:d}, t={:d}'.format(self.p_fshape, self.p_tshape, fshape, tshape))
+            if self.fshape != self.p_fshape or self.tshape != self.p_tshape:
+                raise ValueError('The patch shape of pretraining and fine-tuning is not consistant, pretraining: f={:d}, t={:d}, finetuning: f={:d}, t={:d}'.format(self.p_fshape, self.p_tshape, self.fshape, self.tshape))
 
             # patch split stride generally should be different for pretraining and fine-tuning, as patch split overlapping is only used in finetuning
             # during pretraining, p_fshape = p_fstride and p_tshape = p_tstride
-            if fstride != self.p_fshape or tstride != self.p_tshape:
+            if self.fstride != self.p_fshape or self.tstride != self.p_tshape:
                 # initialize a new patch embedding layer with desired new stride.
-                new_proj = torch.nn.Conv2d(1, self.original_embedding_dim, kernel_size=(fshape, tshape), stride=(fstride, tstride))
+                new_proj = torch.nn.Conv2d(1, self.original_embedding_dim, kernel_size=(self.fshape, self.tshape), stride=(self.fstride, self.tstride))
                 # but the weights of patch embedding layer is still got from the pretrained models
                 new_proj.weight = torch.nn.Parameter(torch.sum(self.v.patch_embed.proj.weight, dim=1).unsqueeze(1))
                 new_proj.bias = self.v.patch_embed.proj.bias
@@ -194,14 +196,14 @@ class ASTModel(nn.Module):
 
             new_pos_embed = self.v.pos_embed[:, self.cls_token_num:, :].detach().reshape(1, p_num_patches, self.original_embedding_dim).transpose(1, 2).reshape(1, self.original_embedding_dim, p_f_dim, p_t_dim)
             # cut or interpolate the positional embedding
-            if t_dim < p_t_dim:
-                new_pos_embed = new_pos_embed[:, :, :, int(p_t_dim/2) - int(t_dim / 2): int(p_t_dim/2) - int(t_dim / 2) + t_dim]
+            if self.t_dim < p_t_dim:
+                new_pos_embed = new_pos_embed[:, :, :, int(p_t_dim/2) - int(self.t_dim / 2): int(p_t_dim/2) - int(self.t_dim / 2) + self.t_dim]
             else:
-                new_pos_embed = torch.nn.functional.interpolate(new_pos_embed, size=(8, t_dim), mode='bilinear')
-            if f_dim < p_f_dim:
-                new_pos_embed = new_pos_embed[:, :, int(p_f_dim/2) - int(f_dim / 2): int(p_f_dim/2) - int(f_dim / 2) + t_dim, :]
+                new_pos_embed = torch.nn.functional.interpolate(new_pos_embed, size=(8, self.t_dim), mode='bilinear')
+            if self.f_dim < p_f_dim:
+                new_pos_embed = new_pos_embed[:, :, int(p_f_dim/2) - int(self.f_dim / 2): int(p_f_dim/2) - int(self.f_dim / 2) + self.t_dim, :]
             else:
-                new_pos_embed = torch.nn.functional.interpolate(new_pos_embed, size=(f_dim, t_dim), mode='bilinear')
+                new_pos_embed = torch.nn.functional.interpolate(new_pos_embed, size=(self.f_dim, self.t_dim), mode='bilinear')
 
             new_pos_embed = new_pos_embed.reshape(1, self.original_embedding_dim, num_patches).transpose(1, 2)
             self.v.pos_embed = nn.Parameter(torch.cat([self.v.pos_embed[:, :self.cls_token_num, :].detach(), new_pos_embed], dim=1))

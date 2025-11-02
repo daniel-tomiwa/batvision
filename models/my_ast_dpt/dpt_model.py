@@ -39,6 +39,8 @@ class DPT(BaseModel):
         channels_last=False,
         use_bn=False,
         enable_attention_hooks=False,
+        input_params=None,
+        load_pretrained_mdl_path=None
     ):
 
         super(DPT, self).__init__()
@@ -53,12 +55,13 @@ class DPT(BaseModel):
         self.pretrained, self.scratch = _make_encoder(
             backbone,
             features,
-            False,  # Set to true of you want to train from scratch, uses ImageNet weights
             groups=1,
             expand=False,
             hooks=hooks[backbone],
             use_readout=readout,
             enable_attention_hooks=enable_attention_hooks,
+            input_params=input_params,
+            load_pretrained_mdl_path=load_pretrained_mdl_path
         )
 
         self.scratch.refinenet1 = _make_fusion_block(features, use_bn)
@@ -129,6 +132,24 @@ class DPTDepthModel(DPT):
 
 if __name__ == "__main__":
 
+    import os
+
+    working_dir = os.getcwd()
+    print(working_dir)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    input_params = {
+        'input_fdim': 128,
+        'input_tdim': 1024,
+        'input_fstride': 16,
+        'input_tstride': 16,
+        'fpatch_size': 16,
+        'tpatch_size': 16
+    }
+
+    inp = torch.randn(1, 1, input_params['input_fdim'], input_params['input_tdim']).to(device)
+
     model = DPTDepthModel(
         path=None,
         backbone="vitb16_384",
@@ -136,8 +157,9 @@ if __name__ == "__main__":
         readout="project",
         channels_last=False,
         use_bn=False,
-    )
+        input_params=input_params,
+        load_pretrained_mdl_path="my_batvision/models/my_ast_dpt/pretrained_models/SSAST-Base-Patch-400.pth?dl=1"
+    ).to(device)
 
-    inp = torch.randn(1, 3, 384, 384)
     out = model(inp)
     print(out.shape)

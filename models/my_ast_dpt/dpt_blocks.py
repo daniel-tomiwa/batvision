@@ -6,20 +6,22 @@ from dpt_vit import _make_pretrained_astb16_384, forward_vit
 def _make_encoder(
         backbone,
         features,
-        use_pretrained,
         groups=1,
         expand=False,
         hooks=None,
         use_readout="ignore",
         enable_attention_hooks=False,
+        input_params=None,
+        load_pretrained_mdl_path=None,
     ):
 
     if backbone == "vitb16_384":
         pretrained = _make_pretrained_astb16_384(
-            use_pretrained,
+            load_pretrained_mdl_path,
             hooks=hooks,
             use_readout=use_readout,
             enable_attention_hooks=enable_attention_hooks,
+            input_params=input_params
         )
         scratch = _make_scratch(
             [96, 192, 384, 768], features, groups=groups, expand=expand
@@ -246,6 +248,11 @@ class FeatureFusionBlock_custom(nn.Module):
 
         if len(xs) == 2:
             res = self.resConfUnit1(xs[1])
+
+            # handle odd size differences
+            if res.shape[2:] != output.shape[2:]:
+                res = nn.functional.interpolate(res, size=output.shape[2:], mode="bilinear", align_corners=self.align_corners)
+
             output = self.skip_add.add(output, res)
             # output += res
 
